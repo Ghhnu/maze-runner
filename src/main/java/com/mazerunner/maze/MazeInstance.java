@@ -3,7 +3,6 @@ package com.mazerunner.maze;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.attribute.EntityAttributeInstance;
 import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.mob.SpiderEntity;
@@ -268,7 +267,7 @@ public final class MazeInstance {
             if (x < 0 || z < 0 || x >= grid.size || z >= grid.size) continue;
             if (!liveOpen[x][z]) continue;
 
-            SpiderEntity spider = EntityType.SPIDER.create(world, SpawnReason.EVENT);
+            SpiderEntity spider = EntityType.SPIDER.create(world);
             if (spider == null) continue;
             spider.refreshPositionAndAngles(origX + x + 0.5, baseY + 1, origZ + z + 0.5, 0, 0);
 
