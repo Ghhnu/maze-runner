@@ -39,6 +39,17 @@ public final class GateGeometry {
             default -> new int[]{c - MazeConfig.INNER_RADIUS, c}; // WEST
         };
     }
+    /** Punto justo en la cara exterior de la muralla de la plaza (hub), para tallar el conector
+     *  recto entre la puerta de la plaza y la celda de entrada al laberinto. */
+    public static int[] hubOuterPoint(int c, Direction dir) {
+        int ringOuterHalf = MazeConfig.HUB_SIZE / 2 + MazeConfig.HUB_WALL_THICKNESS;
+        return switch (dir) {
+            case NORTH -> new int[]{c, c - ringOuterHalf};
+            case SOUTH -> new int[]{c, c + ringOuterHalf};
+            case EAST -> new int[]{c + ringOuterHalf, c};
+            default -> new int[]{c - ringOuterHalf, c}; // WEST
+        };
+    }
     /** Pequeño porche exterior, siempre transitable, justo más allá del caparazón. */
     public static Rect porchRect(int c, Direction dir) {
         int half = MazeConfig.GATE_WIDTH / 2;

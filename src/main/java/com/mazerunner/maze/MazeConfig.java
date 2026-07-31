@@ -30,14 +30,14 @@ public final class MazeConfig {
     public static final int HUB_WALL_THICKNESS = 14;
     /** Altura de la muralla gigante de la plaza (más alta que los muros normales del laberinto). */
     public static final int HUB_WALL_HEIGHT = 100;
-    /** Ancho de la única puerta grande de la plaza (la que abre/cierra {@code /maze open|close}). */
-    public static final int HUB_GATE_WIDTH = 12;
+    /** Ancho de las puertas grandes (la de la plaza y las 4 del caparazón exterior). */
+    public static final int GATE_WIDTH = 12;
     /** Número de sectores que hay que alcanzar dentro del laberinto, en orden (1 -> 2 -> ... -> 7). */
     public static final int SECTOR_COUNT = 7;
     /** Lado de la sala cuadrada abierta que marca cada sector. */
     public static final int SECTOR_ROOM_SIZE = 14;
-    /** Cuánto se alarga el túnel de salida del sector 7 más allá del caparazón, siempre abierto. */
-    public static final int EXIT_PORCH_LENGTH = 10;
+    /** Cuánto se alarga el porche exterior de cada puerta más allá del caparazón, siempre abierto. */
+    public static final int PORCH_LENGTH = 10;
     /** Lado total de la rejilla cuadrada base, en bloques. */
     public static final int GRID_SIZE = CELLS * STEP + WALL_W;
     /** Centro (en índice de bloque local) de la rejilla base. */
@@ -48,10 +48,8 @@ public final class MazeConfig {
     public static final int SHELL_OUTER = INNER_RADIUS + WALL_W;
     /** El laberinto cambia de zona cada 20s (a 20 ticks/segundo). */
     public static final int SHIFT_INTERVAL_TICKS = 20 * 20;
-    /** Las arañas gigantes están presentes 120s por ciclo. */
-    public static final int SPIDER_PRESENT_TICKS = 120 * 20;
-    /** Y luego desaparecen otros 60s antes de volver a aparecer. */
-    public static final int SPIDER_ABSENT_TICKS = 60 * 20;
+    /** Duración de cada mitad del ciclo de las arañas gigantes: 120s presentes + 120s ausentes. */
+    public static final int MOB_PHASE_TICKS = 120 * 20;
     /** Ritmo de la animación de la puerta: una columna nueva cada X ticks. */
     public static final int GATE_ANIM_TICK_STEP = 3;
     /** Cuántos bloques de piedra se colocan por tick al construir/tocar el laberinto. */
