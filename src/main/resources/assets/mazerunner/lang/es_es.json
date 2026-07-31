@@ -1,0 +1,5 @@
+{
+  "commands.maze.generate": "Construye un laberinto circular estilo Maze Runner centrado en las coordenadas dadas. Si ya existe uno, se elimina antes.",
+  "commands.maze.open": "Abre las 4 puertas grandes del laberinto actual.",
+  "commands.maze.close": "Cierra las 4 puertas grandes del laberinto actual."
+}

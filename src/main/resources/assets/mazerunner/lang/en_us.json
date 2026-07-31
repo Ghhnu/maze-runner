@@ -1,0 +1,5 @@
+{
+  "commands.maze.generate": "Builds a circular Maze-Runner style labyrinth centered at the given coordinates. If one already exists, it is removed first.",
+  "commands.maze.open": "Opens the 4 big gates of the current labyrinth.",
+  "commands.maze.close": "Closes the 4 big gates of the current labyrinth."
+}

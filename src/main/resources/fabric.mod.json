@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "mazerunner",
+  "version": "1.0.0",
+  "name": "MazeRunner",
+  "description": "Genera un laberinto circular estilo Maze Runner con /maze <x> <y> <z>: plaza central de 200x200, 7 sectores, 4 puertas grandes, arañas gigantes y cambios cada 120s.",
+  "authors": [
+    "TheRedW1zard"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.mazerunner.MazeRunnerMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}
