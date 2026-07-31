@@ -14,7 +14,9 @@ import net.minecraft.util.math.Direction;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Random;
 
 /**
@@ -76,25 +78,59 @@ public final class MazeInstance {
     // Borrado (cuando se reconstruye encima con /maze x y z)
     // ------------------------------------------------------------------
 
-    public List<MazeBuildQueue.BlockJob> clearJobs() {
-        List<MazeBuildQueue.BlockJob> jobs = new ArrayList<>();
-        int reach = MazeConfig.SHELL_OUTER + MazeConfig.PORCH_LENGTH + 45; // cubre también el desierto
-        for (int x = 0; x < grid.size; x++) {
-            for (int z = 0; z < grid.size; z++) {
-                double dist = Math.hypot(x - grid.center, z - grid.center);
-                if (dist > reach) continue;
-                BlockPos p = new BlockPos(origX + x, baseY, origZ + z);
-                jobs.add(new MazeBuildQueue.BlockJob(world, p, Blocks.GRASS_BLOCK.getDefaultState()));
-                for (int y = 1; y <= MazeConfig.WALL_HEIGHT + 1; y++) {
-                    jobs.add(new MazeBuildQueue.BlockJob(world, p.up(y), Blocks.AIR.getDefaultState()));
-                }
-            }
-        }
+    /**
+     * Igual que antes pero perezoso: para un laberinto grande, esto pueden ser decenas de
+     * millones de bloques, y precalcularlos todos en una {@code List} reventaba la memoria
+     * antes de poder colocar/quitar ni uno solo. Ahora cada bloque se calcula justo antes de
+     * quitarlo, así que el consumo de memoria es constante sin importar el tamaño del laberinto.
+     */
+    public Iterator<MazeBuildQueue.BlockJob> clearJobs() {
         for (SpiderEntity spider : spawnedSpiders) {
             if (spider.isAlive()) spider.discard();
         }
         spawnedSpiders.clear();
-        return jobs;
+        return new ClearJobIterator();
+    }
+
+    private final class ClearJobIterator implements Iterator<MazeBuildQueue.BlockJob> {
+        private final int reach = MazeConfig.SHELL_OUTER + MazeConfig.PORCH_LENGTH + 45; // cubre también el desierto
+        private int x = 0, z = -1;
+        private boolean exhausted = false;
+        private int phase; // 0 = suelo, 1..WALL_HEIGHT+1 = aire
+        private BlockPos p;
+
+        ClearJobIterator() {
+            advance();
+        }
+
+        private void advance() {
+            while (true) {
+                z++;
+                if (z >= grid.size) { z = 0; x++; }
+                if (x >= grid.size) { exhausted = true; return; }
+                double dist = Math.hypot(x - grid.center, z - grid.center);
+                if (dist > reach) continue;
+                p = new BlockPos(origX + x, baseY, origZ + z);
+                phase = 0;
+                return;
+            }
+        }
+
+        @Override
+        public boolean hasNext() {
+            return !exhausted;
+        }
+
+        @Override
+        public MazeBuildQueue.BlockJob next() {
+            if (exhausted) throw new NoSuchElementException();
+            MazeBuildQueue.BlockJob job = phase == 0
+                    ? new MazeBuildQueue.BlockJob(world, p, Blocks.GRASS_BLOCK.getDefaultState())
+                    : new MazeBuildQueue.BlockJob(world, p.up(phase), Blocks.AIR.getDefaultState());
+            phase++;
+            if (phase > MazeConfig.WALL_HEIGHT + 1) advance();
+            return job;
+        }
     }
 
     // ------------------------------------------------------------------

@@ -3,7 +3,6 @@ package com.mazerunner.maze;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
@@ -11,7 +10,9 @@ import net.minecraft.util.math.Direction;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Random;
 
 /**
@@ -29,7 +30,11 @@ public final class MazeBuilder {
     public static void generate(ServerWorld world, BlockPos center, ServerCommandSource source) {
         long seed = new Random().nextLong() ^ System.nanoTime();
         CircularMazeGrid grid = new CircularMazeGrid(seed);
-        Random rnd = new Random(seed ^ 0x9E3779B97F4A7C15L);
+        // Random separada para el cuerpo perezoso del laberinto: se va consumiendo poco a poco
+        // a lo largo de varios minutos (a medida que se colocan bloques), así que no debe
+        // compartirse con la que usan las decoraciones de abajo (esas sí se calculan de golpe).
+        Random gridRnd = new Random(seed ^ 0x9E3779B97F4A7C15L);
+        Random rnd = new Random(seed ^ 0x2545F4914F6CDD1DL);
 
         int origX = center.getX() - grid.center;
         int origZ = center.getZ() - grid.center;
@@ -37,67 +42,20 @@ public final class MazeBuilder {
 
         // Si ya había un laberinto construido, lo borramos primero (se encola antes que la
         // construcción nueva, así que se ejecuta primero gracias al orden FIFO de la cola).
+        // clearJobs() también es perezoso, por la misma razón que el cuerpo del laberinto.
         MazeInstance old = MazeLiveManager.get(world);
         if (old != null) {
-            MazeBuildQueue.submit(old.clearJobs());
+            MazeBuildQueue.submit(old.clearJobs(), null);
             MazeLiveManager.clear(world);
         }
 
-        List<MazeBuildQueue.BlockJob> jobs = new ArrayList<>(grid.size * grid.size * 8);
-        List<int[]> symbolCandidates = new ArrayList<>(); // {x, z, dirIndex}
+        // Pasada ligera sobre la rejilla: solo cuenta cuántas celdas hay (para el mensaje de
+        // progreso) y anota dónde pueden ir símbolos grabados en las paredes. No crea ningún
+        // BlockJob todavía, así que cuesta un puñado de milisegundos aunque el laberinto sea
+        // enorme.
+        CellScan scan = scanCells(grid);
 
-        int hubHalf = MazeConfig.HUB_SIZE / 2;
-
-        for (int x = 0; x < grid.size; x++) {
-            for (int z = 0; z < grid.size; z++) {
-                double dist = Math.hypot(x - grid.center, z - grid.center);
-                if (dist > MazeConfig.SHELL_OUTER) continue;
-
-                boolean shell = dist > MazeConfig.INNER_RADIUS;
-                boolean hub = Math.abs(x - grid.center) < hubHalf && Math.abs(z - grid.center) < hubHalf;
-                CircularMazeGrid.SectorRoom room = roomAt(grid, x, z);
-
-                boolean open;
-                if (shell) open = false; // el caparazón nace sólido: las puertas empiezan cerradas
-                else if (hub || room != null) open = true;
-                else open = grid.open[x][z];
-
-                BlockPos worldPos = new BlockPos(origX + x, baseY, origZ + z);
-
-                BlockState floorState;
-                if (hub) floorState = Blocks.GRASS_BLOCK.getDefaultState();
-                else if (room != null) floorState = Blocks.ANDESITE.getDefaultState();
-                else if (open) floorState = pickMazeFloor(rnd);
-                else floorState = pickWallMaterial(rnd);
-                jobs.add(new MazeBuildQueue.BlockJob(world, worldPos, floorState));
-
-                if (open) {
-                    for (int y = 1; y <= MazeConfig.WALL_HEIGHT; y++) {
-                        jobs.add(new MazeBuildQueue.BlockJob(world, worldPos.up(y), Blocks.AIR.getDefaultState()));
-                    }
-                } else {
-                    BlockState wallState = pickWallMaterial(rnd);
-                    for (int y = 1; y <= MazeConfig.WALL_HEIGHT; y++) {
-                        jobs.add(new MazeBuildQueue.BlockJob(world, worldPos.up(y), wallState));
-                    }
-                    if (!shell && !hub) {
-                        for (int d = 0; d < SIDE_DIRS.length; d++) {
-                            int nx = x + SIDE_DIRS[d].getOffsetX();
-                            int nz = z + SIDE_DIRS[d].getOffsetZ();
-                            if (nx < 0 || nz < 0 || nx >= grid.size || nz >= grid.size) continue;
-                            double ndist = Math.hypot(nx - grid.center, nz - grid.center);
-                            if (ndist > MazeConfig.INNER_RADIUS) continue;
-                            if (grid.open[nx][nz]) {
-                                symbolCandidates.add(new int[]{x, z, d});
-                            }
-                        }
-                    }
-                }
-
-                // techo de barreras sobre todo el disco (laberinto + plaza + caparazón)
-                jobs.add(new MazeBuildQueue.BlockJob(world, worldPos.up(MazeConfig.WALL_HEIGHT + 1), Blocks.BARRIER.getDefaultState()));
-            }
-        }
+        List<MazeBuildQueue.BlockJob> extraJobs = new ArrayList<>();
 
         // --- Porches exteriores de las 4 puertas (siempre transitables, sin techo) ---
         List<MazeInstance.Gate> gates = new ArrayList<>();
@@ -109,44 +67,190 @@ public final class MazeBuilder {
             for (int x = porch.x0(); x <= porch.x1(); x++) {
                 for (int z = porch.z0(); z <= porch.z1(); z++) {
                     BlockPos p = new BlockPos(origX + x, baseY, origZ + z);
-                    jobs.add(new MazeBuildQueue.BlockJob(world, p, pickMazeFloor(rnd)));
+                    extraJobs.add(new MazeBuildQueue.BlockJob(world, p, pickMazeFloor(rnd)));
                     for (int y = 1; y <= MazeConfig.WALL_HEIGHT; y++) {
-                        jobs.add(new MazeBuildQueue.BlockJob(world, p.up(y), Blocks.AIR.getDefaultState()));
+                        extraJobs.add(new MazeBuildQueue.BlockJob(world, p.up(y), Blocks.AIR.getDefaultState()));
                     }
                 }
             }
         }
 
         // --- Desierto de salida, justo más allá del porche de la puerta sur ---
-        buildDesert(jobs, world, grid, origX, origZ, baseY, rnd);
+        buildDesert(extraJobs, world, grid, origX, origZ, baseY, rnd);
 
         // --- Decoración de la plaza central: árboles, vegetación, lago, estructuras ---
-        buildHubDecorations(jobs, world, grid, origX, origZ, baseY, rnd);
+        buildHubDecorations(extraJobs, world, grid, origX, origZ, baseY, rnd);
 
         // --- Números de sector grabados en la pared exterior de cada sala ---
         for (CircularMazeGrid.SectorRoom room : grid.sectorRooms) {
-            stampSectorNumber(jobs, world, grid, origX, origZ, baseY, room);
+            stampSectorNumber(extraJobs, world, grid, origX, origZ, baseY, room);
         }
 
         // --- Símbolos sueltos grabados en algunas paredes del laberinto ---
-        stampSymbols(jobs, world, grid, origX, origZ, baseY, rnd, symbolCandidates);
+        stampSymbols(extraJobs, world, grid, origX, origZ, baseY, rnd, scan.symbolCandidates());
 
-        ServerPlayerEntity player = source.getEntity() instanceof ServerPlayerEntity p ? p : null;
+        int gridJobCount = scan.cellCount() * (MazeConfig.WALL_HEIGHT + 2);
+        int totalJobs = gridJobCount + extraJobs.size();
+
         source.sendFeedback(() -> Text.literal(String.format(
                 "§6[MazeRunner] §fConstruyendo laberinto circular en (%d, %d, %d)... (%d bloques, esto puede tardar varios minutos)",
-                center.getX(), center.getY(), center.getZ(), jobs.size())), false);
+                center.getX(), center.getY(), center.getZ(), totalJobs)), false);
 
         long startMillis = System.currentTimeMillis();
 
         MazeInstance instance = new MazeInstance(world, grid, origX, origZ, baseY, seed, gates);
 
-        MazeBuildQueue.submit(jobs, () -> {
+        // El cuerpo del laberinto (suelo + paredes + techo de todas las celdas) es, con
+        // diferencia, la parte más grande: para un laberinto de este tamaño son decenas de
+        // millones de bloques. En vez de precalcularlos todos en una List (lo que reventaba la
+        // memoria antes de colocar ni uno), un GridJobIterator los calcula uno a uno, justo
+        // antes de que MazeBuildQueue los coloque, tick a tick. Encadenado con los "extras"
+        // (porches, desierto, decoración, números, símbolos) preserva el mismo orden que antes.
+        Iterator<MazeBuildQueue.BlockJob> gridIt = new GridJobIterator(grid, world, origX, origZ, baseY, gridRnd);
+        Iterator<MazeBuildQueue.BlockJob> combined = MazeBuildQueue.chain(List.of(gridIt, extraJobs.iterator()));
+
+        MazeBuildQueue.submit(combined, () -> {
             double seconds = (System.currentTimeMillis() - startMillis) / 1000.0;
             world.getServer().getPlayerManager().broadcast(Text.literal(String.format(
                     "§6[MazeRunner] §fLaberinto terminado en %.1fs. Las puertas están cerradas: usa §b/maze open§f para abrirlas.",
                     seconds)), false);
             MazeLiveManager.register(instance);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Cuerpo del laberinto (perezoso)
+    // ------------------------------------------------------------------
+
+    /** Resultado de la pasada ligera sobre la rejilla: cuántas celdas hay dentro del caparazón
+     *  (para el mensaje de progreso) y dónde puede ir un símbolo grabado (paredes cerradas del
+     *  laberinto propiamente dicho, junto a un pasillo abierto). */
+    private record CellScan(int cellCount, List<int[]> symbolCandidates) {}
+
+    private static CellScan scanCells(CircularMazeGrid grid) {
+        int hubHalf = MazeConfig.HUB_SIZE / 2;
+        int cellCount = 0;
+        List<int[]> symbolCandidates = new ArrayList<>();
+
+        for (int x = 0; x < grid.size; x++) {
+            for (int z = 0; z < grid.size; z++) {
+                double dist = Math.hypot(x - grid.center, z - grid.center);
+                if (dist > MazeConfig.SHELL_OUTER) continue;
+                cellCount++;
+
+                boolean shell = dist > MazeConfig.INNER_RADIUS;
+                boolean hub = Math.abs(x - grid.center) < hubHalf && Math.abs(z - grid.center) < hubHalf;
+                CircularMazeGrid.SectorRoom room = roomAt(grid, x, z);
+
+                boolean open;
+                if (shell) open = false;
+                else if (hub || room != null) open = true;
+                else open = grid.open[x][z];
+
+                if (open || shell || hub) continue; // solo interesa: pared cerrada del laberinto
+
+                for (int d = 0; d < SIDE_DIRS.length; d++) {
+                    int nx = x + SIDE_DIRS[d].getOffsetX();
+                    int nz = z + SIDE_DIRS[d].getOffsetZ();
+                    if (nx < 0 || nz < 0 || nx >= grid.size || nz >= grid.size) continue;
+                    double ndist = Math.hypot(nx - grid.center, nz - grid.center);
+                    if (ndist > MazeConfig.INNER_RADIUS) continue;
+                    if (grid.open[nx][nz]) {
+                        symbolCandidates.add(new int[]{x, z, d});
+                    }
+                }
+            }
+        }
+        return new CellScan(cellCount, symbolCandidates);
+    }
+
+    /**
+     * Genera perezosamente, celda a celda, todos los {@link MazeBuildQueue.BlockJob} del
+     * "cuerpo" del laberinto (suelo + columna vertical + barrera de techo de cada celda dentro
+     * del caparazón). Solo recuerda el estado de la celda actual, así que el consumo de memoria
+     * es constante sin importar lo grande que sea el laberinto — imprescindible aquí, donde son
+     * decenas de millones de bloques.
+     */
+    private static final class GridJobIterator implements Iterator<MazeBuildQueue.BlockJob> {
+        private final CircularMazeGrid grid;
+        private final ServerWorld world;
+        private final int origX, origZ, baseY;
+        private final Random rnd;
+        private final int hubHalf = MazeConfig.HUB_SIZE / 2;
+
+        private int x = 0, z = -1;
+        private boolean exhausted = false;
+        private int phase; // 0 = suelo, 1..WALL_HEIGHT = columna vertical, WALL_HEIGHT+1 = barrera
+        private BlockPos worldPos;
+        private BlockState floorState;
+        private boolean open;
+        private BlockState wallState;
+
+        GridJobIterator(CircularMazeGrid grid, ServerWorld world, int origX, int origZ, int baseY, Random rnd) {
+            this.grid = grid;
+            this.world = world;
+            this.origX = origX;
+            this.origZ = origZ;
+            this.baseY = baseY;
+            this.rnd = rnd;
+            advanceToNextCell();
+        }
+
+        private void advanceToNextCell() {
+            while (true) {
+                z++;
+                if (z >= grid.size) { z = 0; x++; }
+                if (x >= grid.size) { exhausted = true; return; }
+                double dist = Math.hypot(x - grid.center, z - grid.center);
+                if (dist > MazeConfig.SHELL_OUTER) continue;
+                prepareCell(dist);
+                phase = 0;
+                return;
+            }
+        }
+
+        private void prepareCell(double dist) {
+            boolean shell = dist > MazeConfig.INNER_RADIUS;
+            boolean hub = Math.abs(x - grid.center) < hubHalf && Math.abs(z - grid.center) < hubHalf;
+            CircularMazeGrid.SectorRoom room = roomAt(grid, x, z);
+
+            if (shell) open = false; // el caparazón nace sólido: las puertas empiezan cerradas
+            else if (hub || room != null) open = true;
+            else open = grid.open[x][z];
+
+            worldPos = new BlockPos(origX + x, baseY, origZ + z);
+
+            if (hub) floorState = Blocks.GRASS_BLOCK.getDefaultState();
+            else if (room != null) floorState = Blocks.ANDESITE.getDefaultState();
+            else if (open) floorState = pickMazeFloor(rnd);
+            else floorState = pickWallMaterial(rnd);
+
+            wallState = open ? null : pickWallMaterial(rnd);
+        }
+
+        @Override
+        public boolean hasNext() {
+            return !exhausted;
+        }
+
+        @Override
+        public MazeBuildQueue.BlockJob next() {
+            if (exhausted) throw new NoSuchElementException();
+            MazeBuildQueue.BlockJob job;
+            if (phase == 0) {
+                job = new MazeBuildQueue.BlockJob(world, worldPos, floorState);
+            } else if (phase <= MazeConfig.WALL_HEIGHT) {
+                BlockState state = open ? Blocks.AIR.getDefaultState() : wallState;
+                job = new MazeBuildQueue.BlockJob(world, worldPos.up(phase), state);
+            } else {
+                job = new MazeBuildQueue.BlockJob(world, worldPos.up(MazeConfig.WALL_HEIGHT + 1), Blocks.BARRIER.getDefaultState());
+            }
+            phase++;
+            if (phase > MazeConfig.WALL_HEIGHT + 1) {
+                advanceToNextCell();
+            }
+            return job;
+        }
     }
 
     // ------------------------------------------------------------------
